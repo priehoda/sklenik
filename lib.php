@@ -1,11 +1,16 @@
 <?php
-// Spoločné funkcie pre update.php a index.php.
+// Spoločné funkcie.
 
 date_default_timezone_set('Europe/Bratislava');
 
-const DATA_FILE = __DIR__ . '/data/data.json';
-const LOG_FILE  = __DIR__ . '/data/log.txt';
-const LOG_MAX_BYTES = 200000; // pri prekročení sa log skráti
+const STORAGE_DIR  = __DIR__ . '/storage';
+const LATEST_FILE  = STORAGE_DIR . '/latest.json';
+const HISTORY_FILE = STORAGE_DIR . '/history.csv';
+const LOG_FILE     = STORAGE_DIR . '/log.txt';
+const LOG_MAX_BYTES = 200000;
+
+/** Stĺpce zapisované do histórie (podmnožina parametrov WSLink API). */
+const HISTORY_COLUMNS = ['intem', 'inhum', 'rbar', 't1tem', 't1hum', 't1ws', 't1wgust', 't1wdir', 't1raindy', 't1uvi', 't1solrad'];
 
 function load_config(): array
 {
@@ -22,73 +27,81 @@ function load_config(): array
     return $cfg;
 }
 
+function ensure_storage(): void
+{
+    if (!is_dir(STORAGE_DIR) && !mkdir(STORAGE_DIR, 0755, true)) {
+        http_response_code(500);
+        exit("Nedá sa vytvoriť priečinok storage/\n");
+    }
+}
+
 function write_log(string $msg): void
 {
+    ensure_storage();
     if (is_file(LOG_FILE) && filesize(LOG_FILE) > LOG_MAX_BYTES) {
         $tail = substr((string) file_get_contents(LOG_FILE), -intdiv(LOG_MAX_BYTES, 2));
         file_put_contents(LOG_FILE, $tail, LOCK_EX);
     }
-    $line = '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
-    file_put_contents(LOG_FILE, $line, FILE_APPEND | LOCK_EX);
+    file_put_contents(LOG_FILE, '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n", FILE_APPEND | LOCK_EX);
 }
 
-/** Vráti [httpKód, telo, chyba] */
-function http_get(string $url, string $cookie): array
+function load_latest(): ?array
 {
-    $headers = [
-        'Accept: application/json, text/javascript, */*; q=0.01',
-        'X-Requested-With: XMLHttpRequest',
-        'Referer: https://app.weathercloud.net/',
-    ];
-    $ua = 'Mozilla/5.0 (compatible; priehoda-sklenik/1.0)';
-
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 3,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 20,
-            CURLOPT_USERAGENT      => $ua,
-            CURLOPT_HTTPHEADER     => $headers,
-        ]);
-        if ($cookie !== '') {
-            curl_setopt($ch, CURLOPT_COOKIE, $cookie);
-        }
-        $body = curl_exec($ch);
-        $err  = $body === false ? curl_error($ch) : '';
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        return [$code, $body === false ? '' : $body, $err];
-    }
-
-    if (ini_get('allow_url_fopen')) {
-        if ($cookie !== '') {
-            $headers[] = 'Cookie: ' . $cookie;
-        }
-        $ctx = stream_context_create(['http' => [
-            'method' => 'GET', 'timeout' => 20, 'ignore_errors' => true,
-            'user_agent' => $ua, 'header' => implode("\r\n", $headers),
-        ]]);
-        $body = @file_get_contents($url, false, $ctx);
-        $code = 0;
-        foreach ($http_response_header ?? [] as $h) {
-            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) {
-                $code = (int) $m[1];
-            }
-        }
-        return [$code, $body === false ? '' : $body, $body === false ? 'file_get_contents zlyhal' : ''];
-    }
-
-    return [0, '', 'Na hostingu nie je cURL ani allow_url_fopen'];
-}
-
-function load_data(): ?array
-{
-    if (!is_file(DATA_FILE)) {
+    if (!is_file(LATEST_FILE)) {
         return null;
     }
-    $d = json_decode((string) file_get_contents(DATA_FILE), true);
+    $d = json_decode((string) file_get_contents(LATEST_FILE), true);
     return is_array($d) ? $d : null;
+}
+
+function save_json_atomic(string $file, array $data): bool
+{
+    $tmp = $file . '.tmp';
+    return file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX) !== false
+        && rename($tmp, $file);
+}
+
+function append_history(array $values, int $ts, int $days): void
+{
+    if ($days <= 0) {
+        return;
+    }
+    $new = !is_file(HISTORY_FILE);
+    $fh = fopen(HISTORY_FILE, 'a');
+    if (!$fh) {
+        write_log('CHYBA: nedá sa zapísať history.csv');
+        return;
+    }
+    flock($fh, LOCK_EX);
+    if ($new) {
+        fputcsv($fh, array_merge(['time'], HISTORY_COLUMNS), ',', '"', '');
+    }
+    $row = [date('Y-m-d\TH:i:s', $ts)];
+    foreach (HISTORY_COLUMNS as $c) {
+        $row[] = $values[$c] ?? '';
+    }
+    fputcsv($fh, $row, ',', '"', '');
+    flock($fh, LOCK_UN);
+    fclose($fh);
+
+    // Raz denne (približne) orež staré riadky.
+    if (mt_rand(1, 288) === 1) {
+        prune_history($days);
+    }
+}
+
+function prune_history(int $days): void
+{
+    $lines = file(HISTORY_FILE, FILE_IGNORE_NEW_LINES);
+    if (!$lines || count($lines) < 2) {
+        return;
+    }
+    $limit = date('Y-m-d\TH:i:s', time() - $days * 86400);
+    $keep = [$lines[0]];
+    foreach (array_slice($lines, 1) as $l) {
+        if (substr($l, 0, 19) >= $limit) {
+            $keep[] = $l;
+        }
+    }
+    file_put_contents(HISTORY_FILE, implode("\n", $keep) . "\n", LOCK_EX);
 }

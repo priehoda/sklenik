@@ -1,39 +1,54 @@
-# Skleník – meteostanica Sencor SWS 10500 → priehoda.com/sklenik
+# Skleník – meteostanica Sencor SWS 10500 → vlastný server
 
-Zobrazenie dát zo stanice Sencor SWS 10500 (WiFi, skleník, Bojnice) na https://priehoda.com/sklenik (hosting Websupport), aby sa dali jednoducho otvoriť na telefóne Google Pixel (odkaz na ploche).
+Stanica Sencor SWS 10500 (WiFi, skleník, Bojnice) posiela dáta **priamo na vlastný server** cez funkciu „vlastný server“ v aplikácii WSLink. Stránka ich zobrazí na mobile (Google Pixel, odkaz na ploche). Weathercloud ani žiadne neoficiálne API nie sú potrebné.
 
-> **Stav kódu: NEOTESTOVANÝ proti skutočnému Weathercloud.** Otestovaný je iba so simulovanými dátami. Z vývojového prostredia sa k Weathercloud nedalo pripojiť (proxy 403).
+> **Stav: otestované iba simulovanými požiadavkami** (vrátane ukážkovej požiadavky z dokumentácie API). So skutočnou stanicou zatiaľ nie.
+
+## Protokol
+
+Podľa dokumentu **„WSLink data upload API“ v0.6** (výrobca stanice, 7. 11. 2023; kópia: [miroslavmatysek/wslink-api – docs/API.pdf](https://github.com/miroslavmatysek/wslink-api/blob/main/docs/API.pdf)):
+
+- Stanica volá `GET https://<doména>/data/upload.php?wsid=<ID>&wspw=<heslo>&...` (http alebo https). **Cesta `/data/upload.php` je pevná**, zadáva sa iba doména.
+- Jednotky: °C, %, hPa, m/s, mm, W/m². Hodnoty sú desatinné čísla (žiadne desatiny ×10).
+- Dôležité parametre: `intem`/`inhum` (konzola), `rbar` (relatívny tlak), `t1tem`, `t1hum`, `t1ws`, `t1wgust`, `t1wdir`, `t1raindy`, `t1uvi`, `t1solrad`, `t1dew`, `t1cn` (vonkajší senzor pripojený = 1).
+- Odpovede servera: 200 OK, 400 zlá požiadavka, 401 zlé ID alebo heslo.
 
 ## Súbory
 
 | Súbor | Účel |
 |---|---|
-| `update.php` | Volá ho CRON. Overí `?token=`, stiahne dáta z Weathercloud (cURL, inak `file_get_contents`), uloží ich do `data/data.json`, výsledok alebo chybu zapíše do `data/log.txt`. |
-| `index.php` | Zobrazí teplotu (`temp`), vlhkosť (`hum`), tlak (`bar`) a vietor (`wspdavg`) a čas poslednej aktualizácie. Stránka sa obnovuje každých 5 minút. `?raw=1` vypíše surové uložené dáta. |
+| `data/upload.php` | Prijíma dáta zo stanice. Overí `wsid`/`wspw`, uloží posledné hodnoty do `storage/latest.json`, pridá riadok do `storage/history.csv` a zapíše záznam do `storage/log.txt` (heslo sa nikam neukladá). |
+| `index.php` | Stránka pre mobil: vonkajší senzor (teplota, vlhkosť, vietor, nárazy, zrážky, UV, žiarenie, rosný bod) a konzola (teplota, vlhkosť, tlak). Ak senzor nie je pripojený, ukáže varovanie. Obnovuje sa každých 5 minút. `?raw=1` vypíše posledné dáta ako JSON. |
 | `lib.php` | Spoločné funkcie. |
 | `config.example.php` | Vzor nastavení. Skopíruj ho ako `config.php` (ten nie je v gite). |
-| `.htaccess`, `data/.htaccess` | Zakážu priamy prístup ku `config.php`, `data/` a výpis priečinka (Apache 2.4; či ich Websupport rešpektuje, treba overiť). |
+| `.htaccess`, `storage/.htaccess` | Zakážu priamy prístup ku `config.php`, `storage/` a výpis priečinka (Apache 2.4; či ich Websupport rešpektuje, treba overiť). |
 
-Tajný token a prípadná cookie sú iba v `config.php` na serveri. **Nikdy ich necommituj.**
+Heslo stanice je iba v `config.php` na serveri a v aplikácii WSLink. **Nikdy ho necommituj.**
 
 ## Nasadenie na Websupport
 
-1. Cez FTP alebo správcu súborov nahraj obsah repozitára do priečinka `sklenik` v koreni webu priehoda.com (vrátane `.htaccess` a `data/.htaccess`).
-2. Na serveri skopíruj `config.example.php` ako `config.php` a nastav `token` na dlhý náhodný reťazec, napr. z príkazu:
+Keďže stanica posiela vždy na `/data/upload.php` v koreni domény, odporúčam **subdoménu** (napr. `sklenik.priehoda.com`), ktorej koreň je priečinok `sklenik`. Potom funguje `https://sklenik.priehoda.com/data/upload.php` a stránka je aj na `https://priehoda.com/sklenik`. (Postup vytvorenia subdomény a nastavenia jej koreňového priečinka vo Websupport som neoveril.)
+
+1. Nahraj obsah repozitára do priečinka `sklenik` (vrátane `.htaccess`, `storage/.htaccess` a priečinka `data/`).
+2. Na serveri skopíruj `config.example.php` ako `config.php` a nastav `station_id` a `station_password`. Heslo vygeneruj napr. takto (dĺžkový limit vo WSLink nie je overený, ak ho aplikácia neprijme, skráť ho):
    ```bash
-   php -r 'echo bin2hex(random_bytes(24)), "\n";'
+   php -r 'echo bin2hex(random_bytes(8)), "\n";'
    ```
-3. Ručne otvor v prehliadači `https://priehoda.com/sklenik/update.php?token=<TOKEN>`. Musí vypísať `OK`. Ak vypíše chybu, pozri ju (aj v `data/log.txt`).
-4. Over, že `https://priehoda.com/sklenik/config.php` a `https://priehoda.com/sklenik/data/log.txt` vracajú 403 (Forbidden).
-5. CRON: Pokročilá konfigurácia → CRON úlohy → typ „Návšteva URL adresy (wget)“, každých 10 minút, URL `https://priehoda.com/sklenik/update.php?token=<TOKEN>`, e-mailové výsledky vypnúť.
-6. Na Pixeli otvor `https://priehoda.com/sklenik` v Chrome → menu ⋮ → „Add to Home screen“ / „Pridať na plochu“.
+3. Over server ručne v prehliadači:
+   - `https://sklenik.priehoda.com/data/upload.php?wsid=<ID>&wspw=<HESLO>&intem=21.5&inhum=60&rbar=1013&t1cn=0` musí vrátiť `OK`.
+   - `https://sklenik.priehoda.com/` potom ukáže 21,5 °C v časti Konzola.
+   - `https://sklenik.priehoda.com/config.php` a `https://sklenik.priehoda.com/storage/log.txt` musia vrátiť 403.
+4. V aplikácii WSLink pri vlastnom serveri zadaj URL (doménu, napr. `sklenik.priehoda.com`; či sa píše aj `https://`, závisí od aplikácie), ID stanice a heslo rovnaké ako v `config.php`.
+5. Sleduj `storage/log.txt` (cez FTP/správcu súborov) alebo `?raw=1`. Pri `ODMIETNUTÉ` nesedí ID alebo heslo.
+6. Na Pixeli otvor stránku v Chrome → menu ⋮ → „Pridať na plochu“.
 
-## Čo treba overiť po prvých dátach
+Aj bez spárovaného vonkajšieho senzora by mali prichádzať údaje z konzoly (`intem`, `inhum`, `rbar`). Tak sa dá overiť, že spojenie stanica → server funguje. (Že ich stanica posiela aj s odpojeným senzorom, je predpoklad.)
 
-- **Endpoint bez prihlásenia.** Ak `update.php` hlási HTML namiesto JSON alebo HTTP 401/403, endpoint pravdepodobne vyžaduje session cookie (podľa TapHome). Vtedy ju skopíruj z prihláseného prehliadača do `cookie` v `config.php` (nie do verejného súboru).
-- **Mierka hodnôt.** Porovnaj `?raw=1` so stránkou Weathercloud. Ak je napr. `temp` = 215 a Weathercloud ukazuje 21,5 °C, nastav `divide_by_10 => true` (delí teplotu, tlak a vietor; vlhkosť nie).
-- **Jednotky vetra.** Stránka predpokladá m/s. Neoverené.
-- **Hosting.** Či PHP smie volať externé weby (cURL / allow_url_fopen). Ak nie, `update.php` vypíše „Na hostingu nie je cURL ani allow_url_fopen“.
+## Nepotvrdené
+
+- Či stanica vie posielať súčasne na Weathercloud aj na vlastný server.
+- Či stanica akceptuje HTTPS certifikát hostingu (podľa API podporuje http aj https).
+- Ako často stanica posiela dáta (interval v WSLink).
 
 ---
 
@@ -61,8 +76,7 @@ Pridanie stanice zlyhalo s hláškou „There was a problem. Please try again.�
 - TapHome sa nepoužíva, lebo ho používateľ má v inom dome než stanicu.
 
 ## Otvorené body
-- [ ] Spárovať vonkajší senzor, aby Weathercloud dostával dáta.
-- [ ] Nahrať súbory, spustiť `update.php` ručne, skontrolovať `data/log.txt`.
-- [ ] Overiť, či endpoint funguje bez prihlásenia (inak cookie v `config.php`).
-- [ ] Overiť mierku hodnôt (`?raw=1` vs. stránka Weathercloud).
+- [ ] Spárovať vonkajší senzor (bez neho prídu len údaje z konzoly).
+- [ ] Nahrať súbory, nastaviť subdoménu a `config.php`, otestovať `data/upload.php` ručne.
+- [ ] Nastaviť vlastný server vo WSLink a skontrolovať `storage/log.txt`.
 - [ ] Pridať stránku na plochu Pixelu.
