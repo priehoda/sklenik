@@ -13,10 +13,13 @@ Podľa dokumentu **„WSLink data upload API“ v0.6** (výrobca stanice, 7. 11.
 - Dôležité parametre: `intem`/`inhum` (konzola), `rbar` (relatívny tlak), `t1tem`, `t1hum`, `t1ws`, `t1wgust`, `t1wdir`, `t1raindy`, `t1uvi`, `t1solrad`, `t1dew`, `t1cn` (vonkajší senzor pripojený = 1).
 - Odpovede servera: 200 OK, 400 zlá požiadavka, 401 zlé ID alebo heslo.
 
+> **Skutočná stanica volá inú adresu:** podľa logu servera (2026-10-31) posiela každých asi 5 minút na `/weatherstation/updateweatherstation.php`, čo je formát Wunderground. Názvy parametrov v `weatherstation/updateweatherstation.php` vychádzajú z tohto formátu a treba ich overiť podľa `storage/log.txt`.
+
 ## Súbory
 
 | Súbor | Účel |
 |---|---|
+| `weatherstation/updateweatherstation.php` | Prijíma dáta zo stanice vo formáte Wunderground, prevádza imperiálne jednotky a ukladá ich rovnako ako `data/upload.php`. |
 | `data/upload.php` | Prijíma dáta zo stanice. Overí `wsid`/`wspw`, uloží posledné hodnoty do `storage/latest.json`, pridá riadok do `storage/history.csv` a zapíše záznam do `storage/log.txt` (heslo sa nikam neukladá). |
 | `index.php` | Stránka pre mobil: vonkajší senzor (teplota, vlhkosť, vietor, nárazy, zrážky, UV, žiarenie, rosný bod) a konzola (teplota, vlhkosť, tlak). Ak senzor nie je pripojený, ukáže varovanie. Obnovuje sa každých 5 minút. `?raw=1` vypíše posledné dáta ako JSON. |
 | `lib.php` | Spoločné funkcie. |
@@ -76,7 +79,7 @@ Pridanie stanice zlyhalo s hláškou „There was a problem. Please try again.�
 - TapHome sa nepoužíva, lebo ho používateľ má v inom dome než stanicu.
 
 ## Otvorené body
-- [ ] Spárovať vonkajší senzor (bez neho prídu len údaje z konzoly).
-- [ ] Nahrať súbory, nastaviť subdoménu a `config.php`, otestovať `data/upload.php` ručne.
-- [ ] Nastaviť vlastný server vo WSLink a skontrolovať `storage/log.txt`.
+- [x] Spárovať vonkajší senzor (2026-10-31 prišli zo stanice aj vonkajšie hodnoty).
+- [x] Nahrať súbory, nastaviť subdoménu a `config.php`, otestovať `data/upload.php` ručne.
+- [x] Nastaviť vlastný server vo WSLink.
 - [ ] Pridať stránku na plochu Pixelu.
