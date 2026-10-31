@@ -1,0 +1,5 @@
+# Zakáže priamy prístup k citlivým súborom (Apache 2.4).
+<FilesMatch "^(config\.php|config\.example\.php|lib\.php|README\.md|\.gitignore)$">
+    Require all denied
+</FilesMatch>
+Options -Indexes
