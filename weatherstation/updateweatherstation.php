@@ -83,7 +83,8 @@ if (!save_json_atomic(LATEST_FILE, $latest)) {
     http_response_code(500);
     exit("Server error\n");
 }
-append_history($values, $now, (int) ($cfg['history_days'] ?? 90));
+append_history($values, $now);
+check_frost_alert($cfg, $values, $now);
 
 write_log(sprintf('OK: %d hodnôt, vonkajší senzor t1cn=%d, parametre: %s', count($values), $values['t1cn'], $names));
 echo "success\n";

@@ -14,8 +14,18 @@ if (isset($_GET['raw'])) {
     exit;
 }
 
+$daily = daily_stats();
+
+if (isset($_GET['stats'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode(['today' => date('Y-m-d'), 'days' => (object) $daily]);
+    exit;
+}
+
 $v = is_array($data['values'] ?? null) ? $data['values'] : [];
 $outdoorOk = ($v['t1cn'] ?? null) === 1;
+$minToday = $daily[date('Y-m-d')][0] ?? null;
 
 function fmt(array $v, string $k, string $unit, int $dec): string
 {
@@ -61,7 +71,6 @@ header('Cache-Control: no-store');
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="300">
 <meta name="theme-color" content="#1f5130">
 <meta name="robots" content="noindex">
 <title>Skleník</title>
@@ -76,6 +85,47 @@ header('Cache-Control: no-store');
   .value { font-size: 1.5rem; font-weight: 600; margin-top: .25rem; }
   .meta { margin-top: 1rem; font-size: .85rem; opacity: .75; }
   .warn { color: #c0392b; opacity: 1; }
+  .outdoor { grid-auto-flow: dense; }
+  button.card { font: inherit; color: inherit; background: none; text-align: left; cursor: pointer; }
+  button.card[aria-expanded="true"] { border-color: currentColor; }
+  .more { float: right; opacity: .6; }
+  .sub { font-size: .85rem; margin-top: .3rem; opacity: .8; }
+  .sub.frost { color: #2a78d6; opacity: 1; font-weight: 600; }
+  .panel { grid-column: 1 / -1; border: 1px solid #8884; border-radius: .75rem; padding: .9rem; min-width: 0;
+           --bar: #eb6834; --muted: #8888; --ink2: #66655f; }
+  .panel.rain { --bar: #2a78d6; }
+  .tabs { display: flex; gap: .25rem; }
+  .tabs button { flex: 1; font: inherit; font-size: .85rem; color: inherit; background: none; border: 1px solid #8884; border-radius: .5rem; padding: .45rem 0; cursor: pointer; }
+  .tabs button[aria-pressed="true"] { background: #8883; font-weight: 600; }
+  .nav { display: flex; align-items: center; justify-content: space-between; margin: .6rem 0 .2rem; font-size: .9rem; }
+  .nav button { font: inherit; font-size: 1.2rem; line-height: 1; color: inherit; background: none; border: 1px solid #8884; border-radius: .5rem; width: 2.75rem; height: 2.75rem; cursor: pointer; }
+  .nav button:disabled { opacity: .3; cursor: default; }
+  .chart { display: block; width: 100%; }
+  .chart text { font-size: 11px; fill: var(--ink2); }
+  .chart .val { fill: currentColor; font-weight: 600; }
+  .chart .grid { stroke: #8883; }
+  .chart .zero { stroke: currentColor; opacity: .55; }
+  .chart .hit { fill: transparent; cursor: pointer; }
+  .chart .hit:hover, .chart .hit.on { fill: #8882; }
+  .chart .bar { fill: var(--bar); }
+  .readout { min-height: 1.3em; font-size: .85rem; margin: .2rem 0 .6rem; }
+  .panel details { font-size: .85rem; margin-bottom: .6rem; }
+  .panel summary { cursor: pointer; padding: .3rem 0; }
+  .panel table { width: 100%; border-collapse: collapse; margin-top: .3rem; font-variant-numeric: tabular-nums; }
+  .panel th, .panel td { text-align: right; padding: .25rem 0; border-bottom: 1px solid #8883; font-weight: normal; }
+  .panel th:first-child, .panel td:first-child { text-align: left; }
+  .panel th { opacity: .7; }
+  .facts { font-size: .85rem; margin: 0; }
+  .facts h3 { font-size: .85rem; margin: .8rem 0 .25rem; }
+  .facts div { display: flex; justify-content: space-between; gap: 1rem; padding: .15rem 0; }
+  .facts dd { margin: 0; text-align: right; font-weight: 600; }
+  .facts dt { opacity: .8; }
+  .since { font-size: .8rem; opacity: .7; margin: .7rem 0 0; }
+  @media (prefers-color-scheme: dark) {
+    .panel { --bar: #d95926; --ink2: #c3c2b7; }
+    .panel.rain { --bar: #3987e5; }
+    .sub.frost { color: #3987e5; }
+  }
 </style>
 </head>
 <body>
@@ -85,9 +135,20 @@ header('Cache-Control: no-store');
 <?php if (!$outdoorOk && $data !== null): ?>
   <p class="meta warn">Vonkajší senzor nie je pripojený (t1cn ≠ 1).</p>
 <?php endif; ?>
-<div class="grid">
+<div class="grid outdoor">
 <?php foreach ($outdoor as [$label, $val]): ?>
+  <?php $panel = ['Teplota vonku' => 'temp', 'Zrážky dnes' => 'rain'][$label] ?? null; ?>
+  <?php if ($panel !== null): ?>
+  <button type="button" class="card" data-panel="<?= $panel ?>" aria-expanded="false">
+    <div class="label"><span class="more" aria-hidden="true">▾</span><?= htmlspecialchars($label) ?></div>
+    <div class="value"><?= htmlspecialchars($outdoorOk ? $val : '–') ?></div>
+    <?php if ($panel === 'temp' && $minToday !== null): ?>
+      <div class="sub<?= $minToday <= 0 ? ' frost' : '' ?>">dnes min <?= number_format((float) $minToday, 1, ',', ' ') ?> °C<?= $minToday <= 0 ? ' · ❄ mrzlo' : '' ?></div>
+    <?php endif; ?>
+  </button>
+  <?php else: ?>
   <div class="card"><div class="label"><?= htmlspecialchars($label) ?></div><div class="value"><?= htmlspecialchars($outdoorOk ? $val : '–') ?></div></div>
+  <?php endif; ?>
 <?php endforeach; ?>
 </div>
 
@@ -105,5 +166,6 @@ header('Cache-Control: no-store');
   Prijaté <?= htmlspecialchars(date('d.m.Y H:i', $ts)) ?> (pred <?= $ageMin ?> min)<?= $stale ? ' – dáta sú staré' : '' ?>
 <?php endif; ?>
 </p>
+<script src="stats.js?v=1"></script>
 </body>
 </html>

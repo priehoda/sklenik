@@ -2,10 +2,13 @@
 // Spoločné funkcie.
 
 date_default_timezone_set('Europe/Bratislava');
+ini_set('serialize_precision', '-1'); // Bez šumu typu 21.199999 v JSON.
 
 const STORAGE_DIR  = __DIR__ . '/storage';
 const LATEST_FILE  = STORAGE_DIR . '/latest.json';
 const HISTORY_FILE = STORAGE_DIR . '/history.csv';
+const DAILY_FILE   = STORAGE_DIR . '/daily.json';
+const ALERT_FILE   = STORAGE_DIR . '/alert.txt';
 const LOG_FILE     = STORAGE_DIR . '/log.txt';
 const LOG_MAX_BYTES = 200000;
 
@@ -61,11 +64,8 @@ function save_json_atomic(string $file, array $data): bool
         && rename($tmp, $file);
 }
 
-function append_history(array $values, int $ts, int $days): void
+function append_history(array $values, int $ts): void
 {
-    if ($days <= 0) {
-        return;
-    }
     $new = !is_file(HISTORY_FILE);
     $fh = fopen(HISTORY_FILE, 'a');
     if (!$fh) {
@@ -83,25 +83,75 @@ function append_history(array $values, int $ts, int $days): void
     fputcsv($fh, $row, ',', '"', '');
     flock($fh, LOCK_UN);
     fclose($fh);
-
-    // Raz denne (približne) orež staré riadky.
-    if (mt_rand(1, 288) === 1) {
-        prune_history($days);
-    }
 }
 
-function prune_history(int $days): void
+/**
+ * Denné súhrny z histórie: 'RRRR-MM-DD' => [min °C, max °C, zrážky mm].
+ * Výsledok je v daily.json a prepočíta sa, až keď pribudne nové meranie.
+ */
+function daily_stats(): array
 {
-    $lines = file(HISTORY_FILE, FILE_IGNORE_NEW_LINES);
-    if (!$lines || count($lines) < 2) {
-        return;
+    if (!is_file(HISTORY_FILE)) {
+        return [];
     }
-    $limit = date('Y-m-d\TH:i:s', time() - $days * 86400);
-    $keep = [$lines[0]];
-    foreach (array_slice($lines, 1) as $l) {
-        if (substr($l, 0, 19) >= $limit) {
-            $keep[] = $l;
+    if (is_file(DAILY_FILE) && filemtime(DAILY_FILE) > filemtime(HISTORY_FILE)) {
+        $d = json_decode((string) file_get_contents(DAILY_FILE), true);
+        if (is_array($d)) {
+            return $d;
         }
     }
-    file_put_contents(HISTORY_FILE, implode("\n", $keep) . "\n", LOCK_EX);
+    $fh = fopen(HISTORY_FILE, 'r');
+    if (!$fh) {
+        return [];
+    }
+    $head = fgetcsv($fh, null, ',', '"', '');
+    $iTemp = array_search('t1tem', $head ?: [], true);
+    $iRain = array_search('t1raindy', $head ?: [], true);
+    $days = [];
+    $prevRain = 0.0;
+    while (($r = fgetcsv($fh, null, ',', '"', '')) !== false) {
+        $day = substr((string) $r[0], 0, 10);
+        $temp = $r[$iTemp] ?? '';
+        $rain = $r[$iRain] ?? '';
+        if (!is_numeric($temp) && !is_numeric($rain)) {
+            continue;
+        }
+        $days[$day] ??= [null, null, null];
+        if (is_numeric($temp)) {
+            $t = (float) $temp;
+            $days[$day][0] = $days[$day][0] === null ? $t : min($days[$day][0], $t);
+            $days[$day][1] = $days[$day][1] === null ? $t : max($days[$day][1], $t);
+        }
+        if (is_numeric($rain)) {
+            // Stanica posiela denný súčet a sama ho nuluje, preto sa sčítavajú prírastky.
+            // Pokles pod 1 mm je šum zaokrúhlenia, väčší pokles je vynulovanie.
+            $cur = (float) $rain;
+            $add = $cur >= $prevRain ? $cur - $prevRain : ($prevRain - $cur < 1 ? 0.0 : $cur);
+            $days[$day][2] = round(($days[$day][2] ?? 0) + $add, 1);
+            $prevRain = $cur;
+        }
+    }
+    fclose($fh);
+    save_json_atomic(DAILY_FILE, $days);
+    return $days;
+}
+
+/** Pošle najviac jeden e-mail denne, keď vonkajšia teplota klesne na hranicu mrazu. */
+function check_frost_alert(array $cfg, array $values, int $ts): void
+{
+    $to = (string) ($cfg['alert_email'] ?? '');
+    if ($to === '' || !isset($values['t1tem']) || $values['t1tem'] > (float) ($cfg['alert_temp'] ?? 0)) {
+        return;
+    }
+    $day = date('Y-m-d', $ts);
+    if (is_file(ALERT_FILE) && trim((string) file_get_contents(ALERT_FILE)) === $day) {
+        return;
+    }
+    $text = sprintf("Teplota v skleníku klesla na %s °C (%s).\n", number_format((float) $values['t1tem'], 1, ',', ''), date('d.m.Y H:i', $ts));
+    if (mail($to, 'Sklenik: mraz', $text, 'Content-Type: text/plain; charset=utf-8')) {
+        file_put_contents(ALERT_FILE, $day, LOCK_EX);
+        write_log('UPOZORNENIE: mráz, e-mail odoslaný');
+    } else {
+        write_log('CHYBA: e-mail o mraze sa nepodarilo odoslať');
+    }
 }

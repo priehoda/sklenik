@@ -22,11 +22,18 @@ Podľa dokumentu **„WSLink data upload API“ v0.6** (výrobca stanice, 7. 11.
 | `weatherstation/updateweatherstation.php` | Prijíma dáta zo stanice vo formáte Wunderground, prevádza imperiálne jednotky a ukladá ich rovnako ako `data/upload.php`. |
 | `data/upload.php` | Prijíma dáta zo stanice. Overí `wsid`/`wspw`, uloží posledné hodnoty do `storage/latest.json`, pridá riadok do `storage/history.csv` a zapíše záznam do `storage/log.txt` (heslo sa nikam neukladá). |
 | `index.php` | Stránka pre mobil: vonkajší senzor (teplota, vlhkosť, vietor, nárazy, zrážky, UV, žiarenie, rosný bod) a konzola (teplota, vlhkosť, tlak). Ak senzor nie je pripojený, ukáže varovanie. Obnovuje sa každých 5 minút. `?raw=1` vypíše posledné dáta ako JSON. |
-| `lib.php` | Spoločné funkcie. |
+| `stats.js` | Rozbaľovacie grafy a súhrny pod dlaždicami Teplota a Zrážky (dni, týždne, mesiace, roky; mráz, rekordy, porovnanie s minulým rokom). |
+| `lib.php` | Spoločné funkcie vrátane denných súhrnov. |
 | `config.example.php` | Vzor nastavení. Skopíruj ho ako `config.php` (ten nie je v gite). |
 | `.htaccess`, `storage/.htaccess` | Zakážu priamy prístup ku `config.php`, `storage/` a výpis priečinka (Apache 2.4; či ich Websupport rešpektuje, treba overiť). |
 
 Heslo stanice je iba v `config.php` na serveri a v aplikácii WSLink. **Nikdy ho necommituj.**
+
+## História
+
+Každé meranie ostáva natrvalo v `storage/history.csv` (približne 7 MB ročne, nič sa nemaže). Denné súhrny sa počítajú do `storage/daily.json` a `index.php?stats=1` ich vráti ako JSON. Zrážky sa sčítavajú ako prírastky denného súčtu stanice, takže nezáleží na tom, kedy ho stanica vynuluje.
+
+Upozornenie e-mailom pri mraze zapneš v `config.php` hodnotami `alert_email` a `alert_temp`. Odosielanie cez `mail()` na Websuporte zatiaľ nie je overené.
 
 ## Nasadenie na Websupport
 

@@ -12,6 +12,7 @@ return [
     // Po koľkých minútach sa dáta na stránke označia ako staré.
     'stale_minutes' => 30,
 
-    // Koľko dní histórie držať v storage/history.csv (0 = nezapisovať históriu).
-    'history_days' => 90,
+    // Upozornenie e-mailom pri mraze (najviac raz denne). Prázdne = vypnuté.
+    'alert_email' => '',
+    'alert_temp'  => 0,
 ];
